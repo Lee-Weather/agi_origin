@@ -314,7 +314,7 @@ class X1DHStandCfg(LeggedRobotCfg):
         swing_height = 0.15
         step_length = 0.12
         # 踝关节滚动参数：支撑相足跟-足尖滚动幅度
-        ankle_roll_amplitude = 0.12  # 支撑相踝关节跖屈峰值（rad）
+        ankle_roll_amplitude = 0.05  # 降低（原0.12），减少足跟-足尖滚动幅度
         # IK 几何参数（根据 URDF X1_12DOF.urdf 测量，2026-06-16 验证）
         # hip_pitch -> knee_pitch (3D距离，包含 hip_roll/hip_yaw 偏移)
         ik_thigh_length = 0.2678
@@ -337,13 +337,13 @@ class X1DHStandCfg(LeggedRobotCfg):
         max_contact_force = 700  # forces above this value are penalized
         
         class scales:
-            ref_joint_pos = 2.2  # 恢复原值（5.6实验证明提高权重导致抖动）
-            hip_yaw_roll_default = 2.0  # 恢复有效水平（原4.0过高导致无法迈步）
-            leg_symmetry = 1.0  # 新增：约束左右腿 pitch 关节对称，防止单腿驱动
-            feet_clearance = 1.
+            ref_joint_pos = 1.0  # 6.8：保持6.4可学习区间
+            hip_yaw_roll_default = 2.5  # 6.8：2.0->2.5，抑制6.7髋yaw/roll补偿（左yaw偏0.41）
+            leg_symmetry = 1.5  # 6.8：1.0->1.5，配合扩展至roll/yaw/ankle_roll
+            feet_clearance = 1.8  # 6.7：保持抬脚奖励
             feet_contact_number = 2.0
             # gait
-            feet_air_time = 1.2
+            feet_air_time = 1.8  # 6.7：保持摆动相奖励
             foot_slip = -0.1
             feet_distance = 0.2
             knee_distance = 0.2
@@ -357,7 +357,7 @@ class X1DHStandCfg(LeggedRobotCfg):
             track_vel_hard = 0.5
             # base pos
             default_joint_pos = 0.3  # 进一步降低（原0.5），减少与 ref_joint_pos 的冲突，允许更大运动幅度
-            orientation = 1.  # 恢复原值
+            orientation = 1.2  # 6.8：1.0->1.2，抑制躯干偏航（6.7 euler_z均值-0.70rad）
             feet_rotation = 0.3
             base_height = 0.2
             base_acc = 0.2
@@ -418,13 +418,13 @@ class X1DHStandCfgPPO(LeggedRobotCfgPPO):
         policy_class_name = 'ActorCriticDH'
         algorithm_class_name = 'DHPPO'
         num_steps_per_env = 24  # per iteration
-        max_iterations = 3000  # number of policy updates
+        max_iterations = 50  # number of policy updates
 
         # logging
-        save_interval = 100  # check for potential saves every this many iterations
+        save_interval = 5  # check for potential saves every this many iterations
         experiment_name = 'x1_dh_stand'
         run_name = ''
-        # load and resume
+        # load and resume（6.8 从头训练，勿改 resume=True）
         resume = False
         load_run = -1  # -1 = last run
         checkpoint = -1  # -1 = last saved model
