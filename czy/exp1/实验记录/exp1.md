@@ -779,7 +779,7 @@ step_length = self.step_length * torch.clamp(cmd_vel / 0.4, 0.3, 1.0)
 ---
 
 ## 实验 6.0：足跟-足尖自然滚动 + 左右对称性
-
+ 
 ### 1. 目的
 
 修复 5.8 的单腿驱动问题，实现：
