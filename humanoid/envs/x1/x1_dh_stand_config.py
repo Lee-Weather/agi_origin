@@ -418,7 +418,7 @@ class X1DHStandCfgPPO(LeggedRobotCfgPPO):
         policy_class_name = 'ActorCriticDH'
         algorithm_class_name = 'DHPPO'
         num_steps_per_env = 24  # per iteration
-        max_iterations = 50  # number of policy updates
+        max_iterations = 150  # number of policy updates
 
         # logging
         save_interval = 5  # check for potential saves every this many iterations
