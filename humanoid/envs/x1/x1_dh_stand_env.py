@@ -290,7 +290,11 @@ class X1DHStandEnv(LeggedRobot):
         return x0 + (xf - x0) * (10 * s**3 - 15 * s**4 + 6 * s**5)
 
     def _solve_2d_leg_ik(self, foot_pos, is_left, swing_phase=None, stance_phase=None):
-        """Jacobian 映射 IK（基于足端相对默认位置的偏移）。
+        """基于足端位置的关节参考生成（非严格IK）。
+
+        X1 腿部关节布局非标准矢状面（hip_roll/hip_yaw 有 Y/Z 偏移），
+        2D 几何 IK 无法正确处理。改为：以默认关节角度为基础，
+        根据足端 X/Z 偏移量调整 pitch 关节，roll/yaw 保持默认。
 
         Args:
             foot_pos: 足端位置 (N, 3)
@@ -301,6 +305,7 @@ class X1DHStandEnv(LeggedRobot):
         x = foot_pos[:, 0]
         z = foot_pos[:, 2]
 
+        # 足端相对于默认位置的偏移
         if is_left:
             default_x = self.default_foot_pos[0, 0]
             default_z = self.default_foot_pos[0, 2]
@@ -320,32 +325,41 @@ class X1DHStandEnv(LeggedRobot):
             hip_yaw = torch.full_like(x, self.default_dof_pos[0, 8].item())
             ankle_roll = torch.full_like(x, self.default_dof_pos[0, 11].item())
 
-        dx = x - default_x
-        dz = z - default_z
+        dx = x - default_x  # 前向偏移
+        dz = z - default_z  # 垂直偏移（负值=更低）
 
         L1 = self.ik_thigh_length
         L2 = self.ik_shank_length
 
         # Jacobian 映射
-        hip_pitch_delta = dx / (L1 + L2) * 1.2
-        knee_delta = dz / L2 * 0.8
+        hip_pitch_delta = dx / (L1 + L2) * 1.2  # 前移时髋关节前倾
+        knee_delta = dz / L2 * 0.8  # 抬脚时dz>0，膝关节屈曲
 
-        # 踝关节基础补偿
+        # 踝关节基础补偿：保持足底大致水平
         ankle_pitch_base = default_ankle_pitch - hip_pitch_delta * 0.5 - knee_delta * 0.3
 
-        # 踝关节主动滚动
+        # 踝关节主动滚动：足跟-足尖自然步态
         ankle_pitch_delta = torch.zeros_like(x)
+
         if swing_phase is not None:
+            # 摆动相：足尖上翘避免擦地
             swing_phase = torch.clamp(swing_phase, 0.0, 1.0)
-            dorsiflex = -0.08 * torch.sin(torch.pi * swing_phase)  # 6.7：保持温和足尖上翘
+            dorsiflex = 0.0 * torch.sin(torch.pi * swing_phase)  # 7.0t2：关闭摆动相踝增量（与 5.8 参考一致）
             ankle_pitch_delta = ankle_pitch_delta + dorsiflex
-            knee_lift = 0.30 * torch.sin(torch.pi * swing_phase)  # 6.7：0.20->0.30，恢复摆腿驱动力
+
+            # 摆动相额外膝屈曲（抬腿动作）
+            knee_lift = 0.25 * torch.sin(torch.pi * swing_phase)
             knee_delta = knee_delta + knee_lift
-            hip_pitch_delta = hip_pitch_delta + 0.08 * torch.sin(torch.pi * swing_phase)  # 6.7：0.05->0.08
+            # 抬腿时髋关节配合
+            hip_pitch_delta = hip_pitch_delta + 0.1 * torch.sin(torch.pi * swing_phase)
 
         if stance_phase is not None:
+            # 支撑相：足跟-足尖滚动
+            # stance_phase: 0=足跟着地 → 1=足尖离地
             stance_phase = torch.clamp(stance_phase, 0.0, 1.0)
-            roll_amplitude = self.ankle_roll_amplitude
+            # 前半段（0~0.5）：足跟着地，踝关节轻微背屈
+            # 后半段（0.5~1.0）：足尖蹬地，踝关节跖屈
+            roll_amplitude = self.ankle_roll_amplitude  # 从配置读取
             stance_roll = roll_amplitude * torch.sin(torch.pi * stance_phase)
             ankle_pitch_delta = ankle_pitch_delta + stance_roll
 
@@ -737,31 +751,23 @@ class X1DHStandEnv(LeggedRobot):
 
     def _reward_leg_symmetry(self):
         """
-        约束左右腿运动幅度对称，防止单腿驱动和侧向不对称。
-        惩罚左右腿偏离默认值的幅度差异，而非角度值差异。
-        6.8 扩展至 hip_roll / hip_yaw / ankle_roll（6.7 仅覆盖 pitch 链）。
+        约束左右腿关节运动幅度对称，防止单腿驱动。
+        关键：hip_pitch, knee_pitch, ankle_pitch 应大致镜像或相同（髋 pitch 镜像）。
         """
-        left_hip_offset = (self.dof_pos[:, 0] - self.default_dof_pos[:, 0]).abs()
-        right_hip_offset = (self.dof_pos[:, 6] - self.default_dof_pos[:, 6]).abs()
-        left_hip_roll_offset = (self.dof_pos[:, 1] - self.default_dof_pos[:, 1]).abs()
-        right_hip_roll_offset = (self.dof_pos[:, 7] - self.default_dof_pos[:, 7]).abs()
-        left_hip_yaw_offset = (self.dof_pos[:, 2] - self.default_dof_pos[:, 2]).abs()
-        right_hip_yaw_offset = (self.dof_pos[:, 8] - self.default_dof_pos[:, 8]).abs()
-        left_knee_offset = (self.dof_pos[:, 3] - self.default_dof_pos[:, 3]).abs()
-        right_knee_offset = (self.dof_pos[:, 9] - self.default_dof_pos[:, 9]).abs()
-        left_ankle_offset = (self.dof_pos[:, 4] - self.default_dof_pos[:, 4]).abs()
-        right_ankle_offset = (self.dof_pos[:, 10] - self.default_dof_pos[:, 10]).abs()
-        left_ankle_roll_offset = (self.dof_pos[:, 5] - self.default_dof_pos[:, 5]).abs()
-        right_ankle_roll_offset = (self.dof_pos[:, 11] - self.default_dof_pos[:, 11]).abs()
+        left_hip = self.dof_pos[:, 0]   # hip_pitch
+        right_hip = self.dof_pos[:, 6]  # hip_pitch
+        left_knee = self.dof_pos[:, 3]  # knee_pitch
+        right_knee = self.dof_pos[:, 9]  # knee_pitch
+        left_ankle = self.dof_pos[:, 4]  # ankle_pitch
+        right_ankle = self.dof_pos[:, 10]  # ankle_pitch
 
-        diff_hip = (left_hip_offset - right_hip_offset).abs()
-        diff_hip_roll = (left_hip_roll_offset - right_hip_roll_offset).abs()
-        diff_hip_yaw = (left_hip_yaw_offset - right_hip_yaw_offset).abs()
-        diff_knee = (left_knee_offset - right_knee_offset).abs()
-        diff_ankle = (left_ankle_offset - right_ankle_offset).abs()
-        diff_ankle_roll = (left_ankle_roll_offset - right_ankle_roll_offset).abs()
+        # 左腿和右腿的均值差异（非绝对值）
+        # hip_pitch: 左正右负，取 (left + right)/2 衡量偏移量
+        diff_hip = (left_hip - right_hip).abs()
+        diff_knee = (left_knee - right_knee).abs()
+        diff_ankle = (left_ankle - right_ankle).abs()
 
-        diff_total = diff_hip + diff_hip_roll + diff_hip_yaw + diff_knee + diff_ankle + diff_ankle_roll
+        diff_total = diff_hip + diff_knee + diff_ankle
         r = torch.exp(-5 * diff_total)
         return r
 
